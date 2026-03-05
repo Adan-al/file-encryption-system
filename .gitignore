@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+data/
+*.enc
+.env
+.venv/
+venv/
+PLAN.md

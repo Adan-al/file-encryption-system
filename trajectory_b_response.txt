@@ -1,0 +1,1817 @@
+
+╭─── Claude Code v2.1.45 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                 │ Tips for getting started                                                                                                     │
+│                  Welcome back!                  │ Run /init to create a CLAUDE.md file with instructions for Claude                                                            │
+│                                                 │ ─────────────────────────────────────────────────────────────────                                                            │
+│                                                 │ Recent activity                                                                                                              │
+│                     ▐▛███▜▌                     │ No recent activity                                                                                                           │
+│                    ▝▜█████▛▘                    │                                                                                                                              │
+│                      ▘▘ ▝▝                      │                                                                                                                              │
+│         Sonnet 4.6 · API Usage Billing          │                                                                                                                              │
+│   ~/…/-mnt-c-Users-ASUS-Desktop-New-Project/B   │                                                                                                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Debug mode enabled
+  Logging to: /tmp/claude-hfi/1bfb3783-a073-43e1-82a7-4d79cd5632df/debug.txt
+
+  /model to try Opus 4.6
+
+❯ /clear
+  ⎿  (no content)
+
+❯ I want you to add audit logging for all actions. Make sure errors are handled correctly and precisely and refactor the repetitive exception handling. Also, I want you to
+  update the README file. Finally, clean the code as you should remove the dead code and the unnecessary files.
+
+❯ I want you to add audit logging for all actions. Make sure errors are handled correctly and precisely and refactor the repetitive exception handling. Also, I want you to
+  update the README file. Finally, clean the code as you should remove the dead code and the unnecessary files.
+
+❯ I want you to add audit logging for all actions. Make sure errors are handled correctly and precisely and refactor the repetitive exception handling. Also, I want you to
+  update the README file. Finally, clean the code as you should remove the dead code and the unnecessary files.
+
+● I'll start by exploring the codebase to understand its structure and then plan the implementation.
+
+● Explore(Explore codebase structure)
+  ⎿  Done (35 tool uses · 72.2k tokens · 60s)
+  (ctrl+o to expand)
+
+● Now let me read the key files to understand the exact code before making changes.
+
+● Read 16 files (ctrl+o to expand)
+
+● Now let me read the test files to understand the test patterns.
+
+● Explore(Read all test files)
+  ⎿  Done (12 tool uses · 50.3k tokens · 14s)
+  (ctrl+o to expand)
+
+● Now I have a comprehensive understanding of the codebase. Let me create the task plan and start implementing.
+
+● Let me start by creating the audit logging module.
+
+● Write(file_storage/audit.py)
+  ⎿  Wrote 145 lines to file_storage/audit.py
+     """Audit logging for file_storage operations.
+
+     Provides structured audit trail for all security-relevant actions including
+     encryption, decryption, key management, user management, and access control.
+     """
+
+     from __future__ import annotations
+
+     import json
+     import logging
+     … +135 lines (ctrl+o to expand)
+
+● Now I'll work on integrating audit logging into CLI, refactoring the exception handling, and fixing error handling -- these are all closely related in cli.py. Let me also add
+  the DEFAULT_AUDIT_DIR constant.
+
+● First, add the audit directory constant.
+
+● Update(file_storage/constants.py)
+  ⎿  Added 1 line
+      18  ENV_CURRENT_USER: str = "FILE_STORAGE_USER"
+      19  ENV_DATA_DIR: str = "FILE_STORAGE_DATADIR"
+      20  DEFAULT_DATA_DIR: str = "./data"
+      21 +DEFAULT_AUDIT_DIR: str = "./data/audit"
+
+● Now let me rewrite cli.py with the refactored exception handling and audit logging integration.
+
+● Write(file_storage/cli.py)
+  ⎿  Added 387 lines, removed 422 lines
+       3  from __future__ import annotations
+       4
+       5  import argparse
+       6 +import functools
+       7  import os
+       8  import sys
+       9  import tempfile
+      10  import uuid
+      11  from pathlib import Path
+      12 +from typing import Callable
+      13
+      14  from file_storage.access_control import AccessController
+      15 +from file_storage.audit import AuditLogger
+      16  from file_storage.constants import (
+      17      DEFAULT_DATA_DIR,
+      18      DEFAULT_KEYSTORE_DIR,
+     ...
+      26      generate_nonce,
+      27  )
+      28  from file_storage.errors import (
+      29 -    DecryptionError,
+      29      FileStorageError,
+      30 -    IntegrityError,
+      31 -    InvalidFileFormatError,
+      32 -    KeyExpiredError,
+      33 -    KeyNotFoundError,
+      34 -    KeyRevokedError,
+      35 -    RoleNotFoundError,
+      30  )
+      31  from file_storage.file_format import FileHeader, pack_header, unpack_header
+      32  from file_storage.integrity import compute_hmac, verify_hmac
+     ...
+      82      return AccessController(user_store, role_store)
+      83
+      84
+      85 +def _get_audit_logger(args: argparse.Namespace) -> AuditLogger:
+      86 +    """Create an AuditLogger from the resolved data directory."""
+      87 +    data_dir = _get_data_dir(args)
+      88 +    return AuditLogger(data_dir / "audit")
+      89 +
+      90 +
+      91  def _resolve_current_user(
+      92      args: argparse.Namespace, ac: AccessController
+      93  ) -> UserRecord:
+     ...
+       98
+       99
+      100  # ---------------------------------------------------------------------------
+      101 +# Error handling decorator
+      102 +# ---------------------------------------------------------------------------
+      103 +
+      104 +def handle_errors(
+      105 +    audit_event_type: str | None = None,
+      106 +) -> Callable:
+      107 +    """Decorator that handles exceptions and optional audit logging for CLI commands.
+      108 +
+      109 +    Catches FileStorageError, OSError, SystemExit, and ValueError, printing
+      110 +    appropriate error messages and returning exit code 1 on failure.
+      111 +    When audit_event_type is provided, logs success/failure audit events.
+      112 +    """
+      113 +    def decorator(func: Callable) -> Callable:
+      114 +        @functools.wraps(func)
+      115 +        def wrapper(args: argparse.Namespace) -> int:
+      116 +            audit = _get_audit_logger(args) if audit_event_type else None
+      117 +            username = getattr(args, "user", None) or os.environ.get(ENV_CURRENT_USER)
+      118 +            try:
+      119 +                result = func(args)
+      120 +                if audit and audit_event_type:
+      121 +                    audit.log(
+      122 +                        event_type=audit_event_type,
+      123 +                        success=True,
+      124 +                        username=username,
+      125 +                        detail=_extract_audit_detail(args, audit_event_type),
+      126 +                    )
+      127 +                return result
+      128 +            except SystemExit:
+      129 +                if audit and audit_event_type:
+      130 +                    audit.log(
+      131 +                        event_type=audit_event_type,
+      132 +                        success=False,
+      133 +                        username=username,
+      134 +                        error="operation aborted",
+      135 +                    )
+      136 +                return 1
+      137 +            except ValueError as e:
+      138 +                _print_error(str(e))
+      139 +                if audit and audit_event_type:
+      140 +                    audit.log(
+      141 +                        event_type=audit_event_type,
+      142 +                        success=False,
+      143 +                        username=username,
+      144 +                        error=str(e),
+      145 +                    )
+      146 +                return 1
+      147 +            except FileStorageError as e:
+      148 +                _print_error(str(e))
+      149 +                if audit and audit_event_type:
+      150 +                    audit.log(
+      151 +                        event_type=audit_event_type,
+      152 +                        success=False,
+      153 +                        username=username,
+      154 +                        error=str(e),
+      155 +                    )
+      156 +                return 1
+      157 +            except OSError as e:
+      158 +                _print_error(f"file operation failed: {e}")
+      159 +                if audit and audit_event_type:
+      160 +                    audit.log(
+      161 +                        event_type=audit_event_type,
+      162 +                        success=False,
+      163 +                        username=username,
+      164 +                        error=f"file operation failed: {e}",
+      165 +                    )
+      166 +                return 1
+      167 +        return wrapper
+      168 +    return decorator
+      169 +
+      170 +
+      171 +def _extract_audit_detail(args: argparse.Namespace, event_type: str) -> dict:
+      172 +    """Extract relevant details from args for audit logging."""
+      173 +    detail: dict = {}
+      174 +    if hasattr(args, "file") and args.file:
+      175 +        detail["file"] = args.file
+      176 +    if hasattr(args, "key_id") and args.key_id:
+      177 +        detail["key_id"] = args.key_id
+      178 +    if hasattr(args, "username") and args.username and event_type.startswith("user:"):
+      179 +        detail["target_username"] = args.username
+      180 +    if hasattr(args, "name") and args.name:
+      181 +        detail["role_name"] = args.name
+      182 +    if hasattr(args, "output") and args.output:
+      183 +        detail["output"] = args.output
+      184 +    return detail
+      185 +
+      186 +
+      187 +# ---------------------------------------------------------------------------
+      188  # Encrypt / Decrypt commands
+      189  # ---------------------------------------------------------------------------
+      190
+      191 +@handle_errors(audit_event_type="file:encrypt")
+      192  def cmd_encrypt(args: argparse.Namespace) -> int:
+      193      """Encrypt a file."""
+      194      input_path = Path(args.file)
+     ...
+      121          _print_error(f"output file exists: {output_path}. Use --force to overwrite.")
+      122          return 1
+      123
+      124 -    try:
+      125 -        # RBAC enforcement
+      126 -        ac = _get_access_controller(args)
+      127 -        owner_id = None
+      128 -        if ac.is_initialized():
+      129 -            user = _resolve_current_user(args, ac)
+      130 -            ac.check_permission(user, "file:encrypt")
+      131 -            owner_id = user.user_id
+      124 +    # RBAC enforcement
+      125 +    ac = _get_access_controller(args)
+      126 +    owner_id = None
+      127 +    if ac.is_initialized():
+      128 +        user = _resolve_current_user(args, ac)
+      129 +        ac.check_permission(user, "file:encrypt")
+      130 +        owner_id = user.user_id
+      131
+      132 -        km = _get_key_manager(args)
+      133 -        record = km.create_key(description=args.description or "", owner_id=owner_id)
+      132 +    km = _get_key_manager(args)
+      133 +    record = km.create_key(description=args.description or "", owner_id=owner_id)
+      134
+      135 -        plaintext = input_path.read_bytes()
+      136 -        nonce = generate_nonce()
+      135 +    plaintext = input_path.read_bytes()
+      136 +    nonce = generate_nonce()
+      137
+      138 -        header = FileHeader(
+      139 -            key_id=uuid.UUID(record.key_id),
+      140 -            key_version=record.version,
+      141 -            nonce=nonce,
+      142 -            original_filename=input_path.name,
+      143 -        )
+      144 -        header_bytes = pack_header(header)
+      138 +    header = FileHeader(
+      139 +        key_id=uuid.UUID(record.key_id),
+      140 +        key_version=record.version,
+      141 +        nonce=nonce,
+      142 +        original_filename=input_path.name,
+      143 +    )
+      144 +    header_bytes = pack_header(header)
+      145
+      146 -        key = km.get_key_material(record)
+      147 -        ciphertext_tag = aes_encrypt(key, nonce, plaintext, aad=header_bytes)
+      146 +    key = km.get_key_material(record)
+      147 +    ciphertext_tag = aes_encrypt(key, nonce, plaintext, aad=header_bytes)
+      148
+      149 -        hmac_key = derive_hmac_key(key)
+      150 -        file_content = header_bytes + ciphertext_tag
+      151 -        hmac_digest = compute_hmac(hmac_key, file_content)
+      149 +    hmac_key = derive_hmac_key(key)
+      150 +    file_content = header_bytes + ciphertext_tag
+      151 +    hmac_digest = compute_hmac(hmac_key, file_content)
+      152
+      153 -        # Atomic write
+      154 -        fd, tmp_path = tempfile.mkstemp(
+      155 -            dir=str(output_path.parent), suffix=".tmp"
+      156 -        )
+      153 +    # Atomic write
+      154 +    fd, tmp_path = tempfile.mkstemp(
+      155 +        dir=str(output_path.parent), suffix=".tmp"
+      156 +    )
+      157 +    try:
+      158 +        with os.fdopen(fd, "wb") as f:
+      159 +            f.write(file_content + hmac_digest)
+      160 +        os.replace(tmp_path, str(output_path))
+      161 +    except Exception:
+      162          try:
+      163 -            with os.fdopen(fd, "wb") as f:
+      164 -                f.write(file_content + hmac_digest)
+      165 -            os.replace(tmp_path, str(output_path))
+      166 -        except Exception:
+      167 -            try:
+      168 -                os.unlink(tmp_path)
+      169 -            except OSError:
+      170 -                pass
+      171 -            raise
+      163 +            os.unlink(tmp_path)
+      164 +        except OSError:
+      165 +            pass
+      166 +        raise
+      167
+      168 -        km.add_file_association(record.key_id, str(output_path))
+      168 +    km.add_file_association(record.key_id, str(output_path))
+      169
+      170 -        if not args.quiet:
+      171 -            print(f"Encrypted: {input_path} -> {output_path}")
+      172 -            print(f"Key ID: {record.key_id}")
+      170 +    if not args.quiet:
+      171 +        print(f"Encrypted: {input_path} -> {output_path}")
+      172 +        print(f"Key ID: {record.key_id}")
+      173
+      174 -        return 0
+      174 +    return 0
+      175
+      176 -    except SystemExit:
+      177 -        return 1
+      178 -    except FileStorageError as e:
+      179 -        _print_error(str(e))
+      180 -        return 1
+      181 -    except OSError as e:
+      182 -        _print_error(f"file operation failed: {e}")
+      183 -        return 1
+      176
+      177 -
+      177 +@handle_errors(audit_event_type="file:decrypt")
+      178  def cmd_decrypt(args: argparse.Namespace) -> int:
+      179      """Decrypt a file."""
+      180      input_path = Path(args.file)
+     ...
+      195          _print_error(f"permission denied: {input_path}")
+      196          return 1
+      197
+      198 -    try:
+      199 -        data = input_path.read_bytes()
+      198 +    data = input_path.read_bytes()
+      199
+      200 -        if len(data) < HMAC_SIZE:
+      201 -            _print_error("file too small to be a valid encrypted file")
+      202 -            return 1
+      200 +    if len(data) < HMAC_SIZE:
+      201 +        _print_error("file too small to be a valid encrypted file")
+      202 +        return 1
+      203
+      204 -        # Split HMAC from file content
+      205 -        file_data = data[:-HMAC_SIZE]
+      206 -        stored_hmac = data[-HMAC_SIZE:]
+      204 +    # Split HMAC from file content
+      205 +    file_data = data[:-HMAC_SIZE]
+      206 +    stored_hmac = data[-HMAC_SIZE:]
+      207
+      208 -        # Parse header
+      209 -        header, offset = unpack_header(file_data)
+      210 -        header_bytes = file_data[:offset]
+      211 -        ciphertext_tag = file_data[offset:]
+      208 +    # Parse header
+      209 +    header, offset = unpack_header(file_data)
+      210 +    header_bytes = file_data[:offset]
+      211 +    ciphertext_tag = file_data[offset:]
+      212
+      213 -        # Load key and validate
+      214 -        km = _get_key_manager(args)
+      215 -        record = km.get_key(str(header.key_id))
+      213 +    # Load key and validate
+      214 +    km = _get_key_manager(args)
+      215 +    record = km.get_key(str(header.key_id))
+      216
+      217 -        # RBAC enforcement
+      218 -        ac = _get_access_controller(args)
+      219 -        if ac.is_initialized():
+      220 -            user = _resolve_current_user(args, ac)
+      221 -            ac.check_key_access(user, "file:decrypt", "file:decrypt_any", record.owner_id)
+      217 +    # RBAC enforcement
+      218 +    ac = _get_access_controller(args)
+      219 +    if ac.is_initialized():
+      220 +        user = _resolve_current_user(args, ac)
+      221 +        ac.check_key_access(user, "file:decrypt", "file:decrypt_any", record.owner_id)
+      222
+      223 -        km.validate_key_for_use(record)
+      223 +    km.validate_key_for_use(record)
+      224
+      225 -        # Get key material for the file's key version
+      226 -        key = km.get_key_material_for_version(record, header.key_version)
+      225 +    # Get key material for the file's key version
+      226 +    key = km.get_key_material_for_version(record, header.key_version)
+      227
+      228 -        # Verify HMAC (pre-decryption integrity check)
+      229 -        hmac_key = derive_hmac_key(key)
+      230 -        if not verify_hmac(hmac_key, file_data, stored_hmac):
+      231 -            raise IntegrityError(
+      232 -                "File integrity check failed. The file may have been tampered with."
+      233 -            )
+      228 +    # Verify HMAC (pre-decryption integrity check)
+      229 +    hmac_key = derive_hmac_key(key)
+      230 +    if not verify_hmac(hmac_key, file_data, stored_hmac):
+      231 +        from file_storage.errors import IntegrityError
+      232 +        raise IntegrityError(
+      233 +            "File integrity check failed. The file may have been tampered with."
+      234 +        )
+      235
+      236 -        # Decrypt
+      237 -        plaintext = aes_decrypt(key, header.nonce, ciphertext_tag, aad=header_bytes)
+      236 +    # Decrypt
+      237 +    plaintext = aes_decrypt(key, header.nonce, ciphertext_tag, aad=header_bytes)
+      238
+      239 -        # Determine output path
+      240 -        if args.output:
+      241 -            output_path = Path(args.output)
+      242 -        else:
+      243 -            output_path = input_path.parent / header.original_filename
+      239 +    # Determine output path
+      240 +    if args.output:
+      241 +        output_path = Path(args.output)
+      242 +    else:
+      243 +        output_path = input_path.parent / header.original_filename
+      244
+      245 -        if output_path.exists() and not args.force:
+      246 -            _print_error(
+      247 -                f"output file exists: {output_path}. Use --force to overwrite."
+      248 -            )
+      249 -            return 1
+      250 -
+      251 -        # Atomic write
+      252 -        fd, tmp_path = tempfile.mkstemp(
+      253 -            dir=str(output_path.parent), suffix=".tmp"
+      245 +    if output_path.exists() and not args.force:
+      246 +        _print_error(
+      247 +            f"output file exists: {output_path}. Use --force to overwrite."
+      248          )
+      249 +        return 1
+      250 +
+      251 +    # Atomic write
+      252 +    fd, tmp_path = tempfile.mkstemp(
+      253 +        dir=str(output_path.parent), suffix=".tmp"
+      254 +    )
+      255 +    try:
+      256 +        with os.fdopen(fd, "wb") as f:
+      257 +            f.write(plaintext)
+      258 +        os.replace(tmp_path, str(output_path))
+      259 +    except Exception:
+      260          try:
+      261 -            with os.fdopen(fd, "wb") as f:
+      262 -                f.write(plaintext)
+      263 -            os.replace(tmp_path, str(output_path))
+      264 -        except Exception:
+      265 -            try:
+      266 -                os.unlink(tmp_path)
+      267 -            except OSError:
+      268 -                pass
+      269 -            raise
+      261 +            os.unlink(tmp_path)
+      262 +        except OSError:
+      263 +            pass
+      264 +        raise
+      265
+      266 -        if not args.quiet:
+      267 -            print(f"Decrypted: {input_path} -> {output_path}")
+      266 +    if not args.quiet:
+      267 +        print(f"Decrypted: {input_path} -> {output_path}")
+      268
+      269 -        return 0
+      269 +    return 0
+      270
+      271 -    except SystemExit:
+      272 -        return 1
+      273 -    except IntegrityError as e:
+      274 -        _print_error(str(e))
+      275 -        return 1
+      276 -    except KeyExpiredError as e:
+      277 -        _print_error(str(e))
+      278 -        return 1
+      279 -    except KeyRevokedError as e:
+      280 -        _print_error(str(e))
+      281 -        return 1
+      282 -    except KeyNotFoundError as e:
+      283 -        _print_error(str(e))
+      284 -        return 1
+      285 -    except DecryptionError as e:
+      286 -        _print_error(str(e))
+      287 -        return 1
+      288 -    except InvalidFileFormatError as e:
+      289 -        _print_error(str(e))
+      290 -        return 1
+      291 -    except FileStorageError as e:
+      292 -        _print_error(str(e))
+      293 -        return 1
+      294 -    except OSError as e:
+      295 -        _print_error(f"file operation failed: {e}")
+      296 -        return 1
+      271
+      272 -
+      272  # ---------------------------------------------------------------------------
+      273  # Key management commands
+      274  # ---------------------------------------------------------------------------
+      275
+      276 +@handle_errors(audit_event_type="key:list")
+      277  def cmd_keys_list(args: argparse.Namespace) -> int:
+      278      """List all keys."""
+      279 -    try:
+      280 -        km = _get_key_manager(args)
+      281 -        records = km.list_keys()
+      279 +    km = _get_key_manager(args)
+      280 +    records = km.list_keys()
+      281
+      282 -        # RBAC: filter by ownership
+      283 -        ac = _get_access_controller(args)
+      284 -        if ac.is_initialized():
+      285 -            user = _resolve_current_user(args, ac)
+      286 -            ac.check_permission(user, "key:list")
+      287 -            if not ac.has_permission(user, "key:info_any"):
+      288 -                records = [r for r in records if r.owner_id == user.user_id]
+      282 +    # RBAC: filter by ownership
+      283 +    ac = _get_access_controller(args)
+      284 +    if ac.is_initialized():
+      285 +        user = _resolve_current_user(args, ac)
+      286 +        ac.check_permission(user, "key:list")
+      287 +        if not ac.has_permission(user, "key:info_any"):
+      288 +            records = [r for r in records if r.owner_id == user.user_id]
+      289
+      290 -        if args.status != "all":
+      291 -            records = [r for r in records if km.get_key_status(r) == args.status]
+      290 +    if args.status != "all":
+      291 +        records = [r for r in records if km.get_key_status(r) == args.status]
+      292
+      293 -        if not records:
+      294 -            if not args.quiet:
+      295 -                print("No keys found.")
+      296 -            return 0
+      293 +    if not records:
+      294 +        if not args.quiet:
+      295 +            print("No keys found.")
+      296 +        return 0
+      297
+      298 -        # Table output
+      298 +    # Table output
+      299 +    print(
+      300 +        f"{'KEY ID':<38} {'VER':>3} {'STATUS':<8} {'CREATED':<26} {'EXPIRES':<26}"
+      301 +    )
+      302 +    print("-" * 103)
+      303 +    for r in records:
+      304 +        status = km.get_key_status(r)
+      305 +        expires = r.expires_at or "never"
+      306          print(
+      307 -            f"{'KEY ID':<38} {'VER':>3} {'STATUS':<8} {'CREATED':<26} {'EXPIRES':<26}"
+      307 +            f"{r.key_id:<38} {r.version:>3} {status:<8} {r.created_at:<26} {expires:<26}"
+      308          )
+      309 -        print("-" * 103)
+      310 -        for r in records:
+      311 -            status = km.get_key_status(r)
+      312 -            expires = r.expires_at or "never"
+      313 -            print(
+      314 -                f"{r.key_id:<38} {r.version:>3} {status:<8} {r.created_at:<26} {expires:<26}"
+      315 -            )
+      309
+      310 -        return 0
+      310 +    return 0
+      311
+      312 -    except SystemExit:
+      313 -        return 1
+      314 -    except FileStorageError as e:
+      315 -        _print_error(str(e))
+      316 -        return 1
+      312
+      313 -
+      313 +@handle_errors(audit_event_type="key:info")
+      314  def cmd_keys_info(args: argparse.Namespace) -> int:
+      315      """Show details for a specific key."""
+      316 -    try:
+      317 -        km = _get_key_manager(args)
+      318 -        record = km.get_key(args.key_id)
+      316 +    km = _get_key_manager(args)
+      317 +    record = km.get_key(args.key_id)
+      318
+      319 -        # RBAC enforcement
+      320 -        ac = _get_access_controller(args)
+      321 -        if ac.is_initialized():
+      322 -            user = _resolve_current_user(args, ac)
+      323 -            ac.check_key_access(user, "key:info", "key:info_any", record.owner_id)
+      319 +    # RBAC enforcement
+      320 +    ac = _get_access_controller(args)
+      321 +    if ac.is_initialized():
+      322 +        user = _resolve_current_user(args, ac)
+      323 +        ac.check_key_access(user, "key:info", "key:info_any", record.owner_id)
+      324
+      325 -        status = km.get_key_status(record)
+      325 +    status = km.get_key_status(record)
+      326
+      327 -        print(f"Key ID:       {record.key_id}")
+      328 -        print(f"Version:      {record.version}")
+      329 -        print(f"Status:       {status}")
+      330 -        print(f"Algorithm:    {record.algorithm}")
+      331 -        print(f"Created:      {record.created_at}")
+      332 -        print(f"Expires:      {record.expires_at or 'never'}")
+      333 -        print(f"Revoked:      {record.revoked}")
+      334 -        if record.revoked_at:
+      335 -            print(f"Revoked at:   {record.revoked_at}")
+      336 -        print(f"Description:  {record.description or '(none)'}")
+      327 +    print(f"Key ID:       {record.key_id}")
+      328 +    print(f"Version:      {record.version}")
+      329 +    print(f"Status:       {status}")
+      330 +    print(f"Algorithm:    {record.algorithm}")
+      331 +    print(f"Created:      {record.created_at}")
+      332 +    print(f"Expires:      {record.expires_at or 'never'}")
+      333 +    print(f"Revoked:      {record.revoked}")
+      334 +    if record.revoked_at:
+      335 +        print(f"Revoked at:   {record.revoked_at}")
+      336 +    print(f"Description:  {record.description or '(none)'}")
+      337
+      338 -        if record.associated_files:
+      339 -            print(f"\nAssociated files ({len(record.associated_files)}):")
+      340 -            for f in record.associated_files:
+      341 -                print(f"  - {f}")
+      338 +    if record.associated_files:
+      339 +        print(f"\nAssociated files ({len(record.associated_files)}):")
+      340 +        for f in record.associated_files:
+      341 +            print(f"  - {f}")
+      342
+      343 -        if record.previous_versions:
+      344 -            print(f"\nVersion history ({len(record.previous_versions)} previous):")
+      345 -            for pv in record.previous_versions:
+      346 -                print(
+      347 -                    f"  v{pv.version}: created {pv.created_at}, retired {pv.retired_at}"
+      348 -                )
+      343 +    if record.previous_versions:
+      344 +        print(f"\nVersion history ({len(record.previous_versions)} previous):")
+      345 +        for pv in record.previous_versions:
+      346 +            print(
+      347 +                f"  v{pv.version}: created {pv.created_at}, retired {pv.retired_at}"
+      348 +            )
+      349
+      350 -        return 0
+      350 +    return 0
+      351
+      352 -    except SystemExit:
+      353 -        return 1
+      354 -    except KeyNotFoundError as e:
+      355 -        _print_error(str(e))
+      356 -        return 1
+      357 -    except FileStorageError as e:
+      358 -        _print_error(str(e))
+      359 -        return 1
+      352
+      353 -
+      353 +@handle_errors(audit_event_type="key:revoke")
+      354  def cmd_keys_revoke(args: argparse.Namespace) -> int:
+      355      """Revoke a key."""
+      356 -    try:
+      357 -        km = _get_key_manager(args)
+      358 -        record = km.get_key(args.key_id)
+      356 +    km = _get_key_manager(args)
+      357 +    record = km.get_key(args.key_id)
+      358
+      359 -        # RBAC enforcement
+      360 -        ac = _get_access_controller(args)
+      361 -        if ac.is_initialized():
+      362 -            user = _resolve_current_user(args, ac)
+      363 -            ac.check_key_access(user, "key:revoke", "key:revoke_any", record.owner_id)
+      359 +    # RBAC enforcement
+      360 +    ac = _get_access_controller(args)
+      361 +    if ac.is_initialized():
+      362 +        user = _resolve_current_user(args, ac)
+      363 +        ac.check_key_access(user, "key:revoke", "key:revoke_any", record.owner_id)
+      364
+      365 -        record = km.revoke_key(args.key_id)
+      365 +    record = km.revoke_key(args.key_id)
+      366
+      367 -        if not args.quiet:
+      368 -            print(f"Key {record.key_id} has been revoked.")
+      369 -            if record.associated_files:
+      370 -                print(
+      371 -                    f"Warning: {len(record.associated_files)} associated file(s) "
+      372 -                    "will no longer be decryptable."
+      373 -                )
+      367 +    if not args.quiet:
+      368 +        print(f"Key {record.key_id} has been revoked.")
+      369 +        if record.associated_files:
+      370 +            print(
+      371 +                f"Warning: {len(record.associated_files)} associated file(s) "
+      372 +                "will no longer be decryptable."
+      373 +            )
+      374
+      375 -        return 0
+      375 +    return 0
+      376
+      377 -    except SystemExit:
+      378 -        return 1
+      379 -    except KeyNotFoundError as e:
+      380 -        _print_error(str(e))
+      381 -        return 1
+      382 -    except FileStorageError as e:
+      383 -        _print_error(str(e))
+      384 -        return 1
+      377
+      378 -
+      378 +@handle_errors(audit_event_type="key:rotate")
+      379  def cmd_keys_rotate(args: argparse.Namespace) -> int:
+      380      """Rotate a key (new version, re-encrypt associated files)."""
+      381 -    try:
+      382 -        km = _get_key_manager(args)
+      383 -        record = km.get_key(args.key_id)
+      381 +    km = _get_key_manager(args)
+      382 +    record = km.get_key(args.key_id)
+      383
+      384 -        # RBAC enforcement
+      385 -        ac = _get_access_controller(args)
+      386 -        if ac.is_initialized():
+      387 -            user = _resolve_current_user(args, ac)
+      388 -            ac.check_key_access(user, "key:rotate", "key:rotate_any", record.owner_id)
+      384 +    # RBAC enforcement
+      385 +    ac = _get_access_controller(args)
+      386 +    if ac.is_initialized():
+      387 +        user = _resolve_current_user(args, ac)
+      388 +        ac.check_key_access(user, "key:rotate", "key:rotate_any", record.owner_id)
+      389
+      390 -        record = km.rotate_key(args.key_id)
+      390 +    record = km.rotate_key(args.key_id)
+      391
+      392 -        if not args.quiet:
+      392 +    if not args.quiet:
+      393 +        print(
+      394 +            f"Key {record.key_id} rotated to version {record.version}."
+      395 +        )
+      396 +        if record.associated_files:
+      397              print(
+      398 -                f"Key {record.key_id} rotated to version {record.version}."
+      398 +                f"Re-encrypted {len(record.associated_files)} associated file(s)."
+      399              )
+      400 -            if record.associated_files:
+      401 -                print(
+      402 -                    f"Re-encrypted {len(record.associated_files)} associated file(s)."
+      403 -                )
+      400
+      401 -        return 0
+      401 +    return 0
+      402
+      403 -    except SystemExit:
+      404 -        return 1
+      405 -    except KeyNotFoundError as e:
+      406 -        _print_error(str(e))
+      407 -        return 1
+      408 -    except KeyRevokedError as e:
+      409 -        _print_error(str(e))
+      410 -        return 1
+      411 -    except FileStorageError as e:
+      412 -        _print_error(str(e))
+      413 -        return 1
+      403
+      404 -
+      404 +@handle_errors(audit_event_type="key:set_expiry")
+      405  def cmd_keys_expire(args: argparse.Namespace) -> int:
+      406      """Set expiry on a key."""
+      407 -    try:
+      408 -        km = _get_key_manager(args)
+      409 -        record = km.get_key(args.key_id)
+      407 +    km = _get_key_manager(args)
+      408 +    record = km.get_key(args.key_id)
+      409
+      410 -        # RBAC enforcement
+      411 -        ac = _get_access_controller(args)
+      412 -        if ac.is_initialized():
+      413 -            user = _resolve_current_user(args, ac)
+      414 -            ac.check_key_access(
+      415 -                user, "key:set_expiry", "key:set_expiry_any", record.owner_id
+      416 -            )
+      410 +    # RBAC enforcement
+      411 +    ac = _get_access_controller(args)
+      412 +    if ac.is_initialized():
+      413 +        user = _resolve_current_user(args, ac)
+      414 +        ac.check_key_access(
+      415 +            user, "key:set_expiry", "key:set_expiry_any", record.owner_id
+      416 +        )
+      417
+      418 -        expires_at = parse_datetime(args.at)
+      419 -        record = km.set_expiry(args.key_id, expires_at)
+      418 +    expires_at = parse_datetime(args.at)
+      419 +    record = km.set_expiry(args.key_id, expires_at)
+      420
+      421 -        if not args.quiet:
+      422 -            print(f"Key {record.key_id} set to expire at {record.expires_at}.")
+      421 +    if not args.quiet:
+      422 +        print(f"Key {record.key_id} set to expire at {record.expires_at}.")
+      423
+      424 -        return 0
+      424 +    return 0
+      425
+      426 -    except SystemExit:
+      427 -        return 1
+      428 -    except ValueError as e:
+      429 -        _print_error(str(e))
+      430 -        return 1
+      431 -    except KeyNotFoundError as e:
+      432 -        _print_error(str(e))
+      433 -        return 1
+      434 -    except FileStorageError as e:
+      435 -        _print_error(str(e))
+      436 -        return 1
+      426
+      427 -
+      427  # ---------------------------------------------------------------------------
+      428  # Init command
+      429  # ---------------------------------------------------------------------------
+      430
+      431 +@handle_errors(audit_event_type="system:init")
+      432  def cmd_init(args: argparse.Namespace) -> int:
+      433      """Initialize the RBAC system."""
+      434 -    try:
+      435 -        ac = _get_access_controller(args)
+      436 -        user = ac.initialize(args.admin_user, args.admin_password)
+      437 -        if not args.quiet:
+      438 -            print(f"System initialized. Admin user '{user.username}' created.")
+      439 -            print(f"User ID: {user.user_id}")
+      440 -        return 0
+      441 -    except FileStorageError as e:
+      442 -        _print_error(str(e))
+      443 -        return 1
+      434 +    ac = _get_access_controller(args)
+      435 +    user = ac.initialize(args.admin_user, args.admin_password)
+      436 +    if not args.quiet:
+      437 +        print(f"System initialized. Admin user '{user.username}' created.")
+      438 +        print(f"User ID: {user.user_id}")
+      439 +    return 0
+      440
+      441
+      442  # ---------------------------------------------------------------------------
+      443  # User management commands
+      444  # ---------------------------------------------------------------------------
+      445
+      446 +@handle_errors(audit_event_type="user:create")
+      447  def cmd_user_create(args: argparse.Namespace) -> int:
+      448      """Create a new user."""
+      449 -    try:
+      450 -        ac = _get_access_controller(args)
+      451 -        acting_user = _resolve_current_user(args, ac)
+      452 -        new_user = ac.create_user(acting_user, args.username, args.password, args.role)
+      453 -        if not args.quiet:
+      454 -            print(f"User '{new_user.username}' created with role '{args.role}'.")
+      455 -            print(f"User ID: {new_user.user_id}")
+      456 -        return 0
+      457 -    except SystemExit:
+      458 -        return 1
+      459 -    except FileStorageError as e:
+      460 -        _print_error(str(e))
+      461 -        return 1
+      449 +    ac = _get_access_controller(args)
+      450 +    acting_user = _resolve_current_user(args, ac)
+      451 +    new_user = ac.create_user(acting_user, args.username, args.password, args.role)
+      452 +    if not args.quiet:
+      453 +        print(f"User '{new_user.username}' created with role '{args.role}'.")
+      454 +        print(f"User ID: {new_user.user_id}")
+      455 +    return 0
+      456
+      457
+      458 +@handle_errors(audit_event_type="user:list")
+      459  def cmd_user_list(args: argparse.Namespace) -> int:
+      460      """List all users."""
+      461 -    try:
+      462 -        ac = _get_access_controller(args)
+      463 -        acting_user = _resolve_current_user(args, ac)
+      464 -        users = ac.list_users(acting_user)
+      465 -        if not users:
+      466 -            if not args.quiet:
+      467 -                print("No users found.")
+      468 -            return 0
+      469 -        print(f"{'USERNAME':<20} {'USER ID':<38} {'ACTIVE':<8} {'EXPIRES':<26}")
+      470 -        print("-" * 94)
+      471 -        for u in users:
+      472 -            expires = u.access_expires_at or "never"
+      473 -            active = "yes" if u.is_active else "no"
+      474 -            print(f"{u.username:<20} {u.user_id:<38} {active:<8} {expires:<26}")
+      461 +    ac = _get_access_controller(args)
+      462 +    acting_user = _resolve_current_user(args, ac)
+      463 +    users = ac.list_users(acting_user)
+      464 +    if not users:
+      465 +        if not args.quiet:
+      466 +            print("No users found.")
+      467          return 0
+      468 -    except SystemExit:
+      469 -        return 1
+      470 -    except FileStorageError as e:
+      471 -        _print_error(str(e))
+      472 -        return 1
+      468 +    print(f"{'USERNAME':<20} {'USER ID':<38} {'ACTIVE':<8} {'EXPIRES':<26}")
+      469 +    print("-" * 94)
+      470 +    for u in users:
+      471 +        expires = u.access_expires_at or "never"
+      472 +        active = "yes" if u.is_active else "no"
+      473 +        print(f"{u.username:<20} {u.user_id:<38} {active:<8} {expires:<26}")
+      474 +    return 0
+      475
+      476
+      477 +@handle_errors(audit_event_type="user:info")
+      478  def cmd_user_info(args: argparse.Namespace) -> int:
+      479      """Show user details."""
+      480 -    try:
+      481 -        ac = _get_access_controller(args)
+      482 -        acting_user = _resolve_current_user(args, ac)
+      483 -        target = ac.get_user_info(acting_user, args.username)
+      484 -        print(f"User ID:     {target.user_id}")
+      485 -        print(f"Username:    {target.username}")
+      486 -        print(f"Active:      {target.is_active}")
+      487 -        print(f"Created:     {target.created_at}")
+      488 -        print(f"Expires:     {target.access_expires_at or 'never'}")
+      489 -        if target.deactivated_at:
+      490 -            print(f"Deactivated: {target.deactivated_at}")
+      491 -        for role_id in target.role_ids:
+      492 -            try:
+      493 -                role = ac.role_store.load_role(role_id)
+      494 -                print(f"Role:        {role.name} ({role_id})")
+      495 -            except Exception:
+      496 -                print(f"Role:        <unknown> ({role_id})")
+      497 -        return 0
+      498 -    except SystemExit:
+      499 -        return 1
+      500 -    except FileStorageError as e:
+      501 -        _print_error(str(e))
+      502 -        return 1
+      480 +    ac = _get_access_controller(args)
+      481 +    acting_user = _resolve_current_user(args, ac)
+      482 +    target = ac.get_user_info(acting_user, args.username)
+      483 +    print(f"User ID:     {target.user_id}")
+      484 +    print(f"Username:    {target.username}")
+      485 +    print(f"Active:      {target.is_active}")
+      486 +    print(f"Created:     {target.created_at}")
+      487 +    print(f"Expires:     {target.access_expires_at or 'never'}")
+      488 +    if target.deactivated_at:
+      489 +        print(f"Deactivated: {target.deactivated_at}")
+      490 +    for role_id in target.role_ids:
+      491 +        try:
+      492 +            role = ac.role_store.load_role(role_id)
+      493 +            print(f"Role:        {role.name} ({role_id})")
+      494 +        except Exception:
+      495 +            print(f"Role:        <unknown> ({role_id})")
+      496 +    return 0
+      497
+      498
+      499 +@handle_errors(audit_event_type="user:deactivate")
+      500  def cmd_user_deactivate(args: argparse.Namespace) -> int:
+      501      """Deactivate a user."""
+      502 -    try:
+      503 -        ac = _get_access_controller(args)
+      504 -        acting_user = _resolve_current_user(args, ac)
+      505 -        target = ac.deactivate_user(acting_user, args.username)
+      506 -        if not args.quiet:
+      507 -            print(f"User '{target.username}' has been deactivated.")
+      508 -        return 0
+      509 -    except SystemExit:
+      510 -        return 1
+      511 -    except FileStorageError as e:
+      512 -        _print_error(str(e))
+      513 -        return 1
+      502 +    ac = _get_access_controller(args)
+      503 +    acting_user = _resolve_current_user(args, ac)
+      504 +    target = ac.deactivate_user(acting_user, args.username)
+      505 +    if not args.quiet:
+      506 +        print(f"User '{target.username}' has been deactivated.")
+      507 +    return 0
+      508
+      509
+      510 +@handle_errors(audit_event_type="user:set_expiry")
+      511  def cmd_user_set_expiry(args: argparse.Namespace) -> int:
+      512      """Set user access expiry."""
+      513 -    try:
+      514 -        ac = _get_access_controller(args)
+      515 -        acting_user = _resolve_current_user(args, ac)
+      516 -        target = ac.set_user_expiry(acting_user, args.username, args.at)
+      517 -        if not args.quiet:
+      518 -            print(f"User '{target.username}' access set to expire at {args.at}.")
+      519 -        return 0
+      520 -    except SystemExit:
+      521 -        return 1
+      522 -    except FileStorageError as e:
+      523 -        _print_error(str(e))
+      524 -        return 1
+      513 +    ac = _get_access_controller(args)
+      514 +    acting_user = _resolve_current_user(args, ac)
+      515 +    target = ac.set_user_expiry(acting_user, args.username, args.at)
+      516 +    if not args.quiet:
+      517 +        print(f"User '{target.username}' access set to expire at {args.at}.")
+      518 +    return 0
+      519
+      520
+      521  # ---------------------------------------------------------------------------
+      522  # Role commands
+      523  # ---------------------------------------------------------------------------
+      524
+      525 +@handle_errors(audit_event_type="role:list")
+      526  def cmd_role_list(args: argparse.Namespace) -> int:
+      527      """List all roles."""
+      528 -    try:
+      529 -        ac = _get_access_controller(args)
+      530 -        acting_user = _resolve_current_user(args, ac)
+      531 -        ac.check_permission(acting_user, "role:list")
+      532 -        roles = ac.role_store.list_roles()
+      533 -        if not roles:
+      534 -            if not args.quiet:
+      535 -                print("No roles found.")
+      536 -            return 0
+      537 -        print(f"{'NAME':<16} {'PERMISSIONS':<12} {'DESCRIPTION'}")
+      538 -        print("-" * 70)
+      539 -        for r in roles:
+      540 -            print(f"{r.name:<16} {len(r.permissions):<12} {r.description}")
+      528 +    ac = _get_access_controller(args)
+      529 +    acting_user = _resolve_current_user(args, ac)
+      530 +    ac.check_permission(acting_user, "role:list")
+      531 +    roles = ac.role_store.list_roles()
+      532 +    if not roles:
+      533 +        if not args.quiet:
+      534 +            print("No roles found.")
+      535          return 0
+      536 -    except SystemExit:
+      537 -        return 1
+      538 -    except FileStorageError as e:
+      539 -        _print_error(str(e))
+      540 -        return 1
+      536 +    print(f"{'NAME':<16} {'PERMISSIONS':<12} {'DESCRIPTION'}")
+      537 +    print("-" * 70)
+      538 +    for r in roles:
+      539 +        print(f"{r.name:<16} {len(r.permissions):<12} {r.description}")
+      540 +    return 0
+      541
+      542
+      543 +@handle_errors(audit_event_type="role:info")
+      544  def cmd_role_info(args: argparse.Namespace) -> int:
+      545      """Show role details."""
+      546 -    try:
+      547 -        ac = _get_access_controller(args)
+      548 -        acting_user = _resolve_current_user(args, ac)
+      549 -        ac.check_permission(acting_user, "role:info")
+      550 -        role = ac.role_store.load_role_by_name(args.name)
+      551 -        print(f"Role ID:      {role.role_id}")
+      552 -        print(f"Name:         {role.name}")
+      553 -        print(f"Description:  {role.description}")
+      554 -        print(f"Created:      {role.created_at}")
+      555 -        print(f"Permissions ({len(role.permissions)}):")
+      556 -        for p in sorted(role.permissions):
+      557 -            print(f"  - {p}")
+      558 -        return 0
+      559 -    except SystemExit:
+      560 -        return 1
+      561 -    except RoleNotFoundError as e:
+      562 -        _print_error(str(e))
+      563 -        return 1
+      564 -    except FileStorageError as e:
+      565 -        _print_error(str(e))
+      566 -        return 1
+      546 +    ac = _get_access_controller(args)
+      547 +    acting_user = _resolve_current_user(args, ac)
+      548 +    ac.check_permission(acting_user, "role:info")
+      549 +    role = ac.role_store.load_role_by_name(args.name)
+      550 +    print(f"Role ID:      {role.role_id}")
+      551 +    print(f"Name:         {role.name}")
+      552 +    print(f"Description:  {role.description}")
+      553 +    print(f"Created:      {role.created_at}")
+      554 +    print(f"Permissions ({len(role.permissions)}):")
+      555 +    for p in sorted(role.permissions):
+      556 +        print(f"  - {p}")
+      557 +    return 0
+      558
+      559
+      560  # ---------------------------------------------------------------------------
+
+● Now fix the IntegrityError import — it shouldn't be a late import.
+
+● Update(file_storage/cli.py)
+  ⎿  Added 1 line
+      30  )
+      31  from file_storage.errors import (
+      32      FileStorageError,
+      33 +    IntegrityError,
+      34  )
+      35  from file_storage.file_format import FileHeader, pack_header, unpack_header
+      36  from file_storage.integrity import compute_hmac, verify_hmac
+
+● Update(file_storage/cli.py)
+  ⎿  Removed 1 line
+      310      # Verify HMAC (pre-decryption integrity check)
+      311      hmac_key = derive_hmac_key(key)
+      312      if not verify_hmac(hmac_key, file_data, stored_hmac):
+      313 -        from file_storage.errors import IntegrityError
+      313          raise IntegrityError(
+      314              "File integrity check failed. The file may have been tampered with."
+      315          )
+
+● Now let me add audit logging to key_manager.py. The key manager performs critical key lifecycle operations that need auditing. I also need to fix the silent failure issue
+  during rotation.
+
+● Write(file_storage/key_manager.py)
+  ⎿  Added 25 lines, removed 5 lines
+      3  from __future__ import annotations
+      4
+      5  import base64
+      6 +import logging
+      7  from datetime import datetime, timezone
+      8  from pathlib import Path
+      9
+     ...
+      25  from file_storage.utils import generate_uuid, is_expired, utc_now_iso
+      26  from file_storage.constants import HMAC_SIZE
+      27
+      28 +logger = logging.getLogger("file_storage.key_manager")
+      29
+      30 +
+      31  class KeyManager:
+      32      """Manages key lifecycle operations."""
+      33
+     ...
+      54              owner_id=owner_id,
+      55          )
+      56          self._store.save_key(record)
+      57 +        logger.info("Key created: %s (owner=%s)", record.key_id, owner_id)
+      58          return record
+      59
+      60      def get_key(self, key_id: str) -> KeyRecord:
+     ...
+       97              record.revoked = True
+       98              record.revoked_at = utc_now_iso()
+       99              self._store.save_key(record)
+      100 +            logger.info("Key revoked: %s", key_id)
+      101          return record
+      102
+      103      def set_expiry(self, key_id: str, expires_at: datetime) -> KeyRecord:
+     ...
+      110          record = self._store.load_key(key_id)
+      111          record.expires_at = expires_at.isoformat()
+      112          self._store.save_key(record)
+      113 +        logger.info("Key expiry set: %s -> %s", key_id, record.expires_at)
+      114          return record
+      115
+      116      def rotate_key(self, key_id: str) -> KeyRecord:
+     ...
+      151              try:
+      152                  self._reencrypt_file(file_path, old_key, new_key, record)
+      153                  updated_files.append(file_path)
+      154 -            except Exception:
+      155 -                # If re-encryption fails, keep the file in the list
+      154 +            except FileNotFoundError:
+      155 +                logger.warning(
+      156 +                    "File not found during rotation, removing association: %s",
+      157 +                    file_path,
+      158 +                )
+      159 +            except Exception as exc:
+      160 +                logger.error(
+      161 +                    "Failed to re-encrypt file during rotation: %s: %s",
+      162 +                    file_path,
+      163 +                    exc,
+      164 +                )
+      165                  updated_files.append(file_path)
+      166
+      167          record.associated_files = updated_files
+      168          self._store.save_key(record)
+      169 +        logger.info(
+      170 +            "Key rotated: %s -> version %d (%d files re-encrypted)",
+      171 +            key_id,
+      172 +            record.version,
+      173 +            len(updated_files),
+      174 +        )
+      175          return record
+      176
+      177      def _reencrypt_file(
+     ...
+      169          """Re-encrypt a file with a new key version."""
+      170          path = Path(file_path)
+      171          if not path.exists():
+      172 -            return
+      172 +            raise FileNotFoundError(f"File not found: {file_path}")
+      173
+      174          data = path.read_bytes()
+      175          if len(data) < HMAC_SIZE:
+     ...
+      178          # Strip HMAC, parse header, decrypt with old key
+      179          file_data = data[:-HMAC_SIZE]
+      180          header, offset = unpack_header(file_data)
+      181 -        old_version_key = old_key
+      181          ciphertext_tag = file_data[offset:]
+      182
+      183          header_bytes = file_data[:offset]
+      184 -        plaintext = aes_decrypt(old_version_key, header.nonce, ciphertext_tag, aad=header_bytes)
+      184 +        plaintext = aes_decrypt(old_key, header.nonce, ciphertext_tag, aad=header_bytes)
+      185
+      186          # Re-encrypt with new key
+      187          nonce = generate_nonce()
+
+● Now add audit logging to access_control.py.
+
+● Write(file_storage/access_control.py)
+  ⎿  Added 34 lines
+      2
+      3  from __future__ import annotations
+      4
+      5 +import logging
+      6 +
+      7  from file_storage.errors import (
+      8      AccessDeniedError,
+      9      AuthenticationError,
+     ...
+      21  )
+      22  from file_storage.utils import generate_uuid, is_expired, utc_now_iso
+      23
+      24 +logger = logging.getLogger("file_storage.access_control")
+      25
+      26 +
+      27  class AccessController:
+      28      """Enforces RBAC policies for all file_storage operations.
+      29
+     ...
+      81              deactivated_at=None,
+      82          )
+      83          self._user_store.save_user(user)
+      84 +        logger.info("System initialized, admin user created: %s", admin_username)
+      85          return user
+      86
+      87      # --- User validation ---
+     ...
+      89          """Authenticate a user by username and password."""
+      90          user = self._user_store.load_user_by_username(username)
+      91          if not verify_password(password, user.password_hash):
+      92 +            logger.warning("Authentication failed for user: %s", username)
+      93              raise AuthenticationError("Invalid password")
+      94          self._validate_user_active(user)
+      95 +        logger.info("User authenticated: %s", username)
+      96          return user
+      97
+      98      def resolve_user(self, username: str) -> UserRecord:
+     ...
+      132      def check_permission(self, user: UserRecord, permission: str) -> None:
+      133          """Assert that a user has a permission. Raises AccessDeniedError if not."""
+      134          if not self.has_permission(user, permission):
+      135 +            logger.warning(
+      136 +                "Access denied: user '%s' lacks permission '%s'",
+      137 +                user.username,
+      138 +                permission,
+      139 +            )
+      140              raise AccessDeniedError(
+      141                  f"User '{user.username}' lacks permission '{permission}'"
+      142              )
+     ...
+      158          if permission in perms and key_owner_id == user.user_id:
+      159              return
+      160
+      161 +        logger.warning(
+      162 +            "Key access denied: user '%s' for key owned by '%s'",
+      163 +            user.username,
+      164 +            key_owner_id or "unknown",
+      165 +        )
+      166          raise AccessDeniedError(
+      167              f"User '{user.username}' lacks permission to perform this operation "
+      168              f"on key owned by '{key_owner_id or 'unknown'}'"
+     ...
+      191              deactivated_at=None,
+      192          )
+      193          self._user_store.save_user(user)
+      194 +        logger.info(
+      195 +            "User created: '%s' with role '%s' (by '%s')",
+      196 +            username,
+      197 +            role_name,
+      198 +            acting_user.username,
+      199 +        )
+      200          return user
+      201
+      202      def deactivate_user(
+     ...
+      208          target.is_active = False
+      209          target.deactivated_at = utc_now_iso()
+      210          self._user_store.save_user(target)
+      211 +        logger.info(
+      212 +            "User deactivated: '%s' (by '%s')",
+      213 +            target_username,
+      214 +            acting_user.username,
+      215 +        )
+      216          return target
+      217
+      218      def set_user_expiry(
+     ...
+      221          target = self._user_store.load_user_by_username(target_username)
+      222          target.access_expires_at = expires_at
+      223          self._user_store.save_user(target)
+      224 +        logger.info(
+      225 +            "User expiry set: '%s' -> %s (by '%s')",
+      226 +            target_username,
+      227 +            expires_at,
+      228 +            acting_user.username,
+      229 +        )
+      230          return target
+      231
+      232      def list_users(self, acting_user: UserRecord) -> list[UserRecord]:
+
+● Now fix the error handling precision issues. The user_store.py uses KeyStoreCorruptionError for user file corruption -- this is semantically wrong. Let me add a proper
+  UserStoreCorruptionError.
+
+● Update(file_storage/errors.py)
+  ⎿  Added 4 lines
+      21      """Raised when a key file is malformed or unreadable."""
+      22
+      23
+      24 +class StoreCorruptionError(FileStorageError):
+      25 +    """Raised when any store file (user, role) is malformed or unreadable."""
+      26 +
+      27 +
+      28  class InvalidFileFormatError(FileStorageError):
+      29      """Raised when a file does not have valid File_storage headers."""
+      30
+
+● Now update user_store.py to use StoreCorruptionError instead of KeyStoreCorruptionError.
+
+● Update(file_storage/user_store.py)
+  ⎿  Added 1 line, removed 1 line
+      10  from dataclasses import asdict, dataclass, field
+      11  from pathlib import Path
+      12
+      13 -from file_storage.errors import UserNotFoundError, KeyStoreCorruptionError
+      13 +from file_storage.errors import UserNotFoundError, StoreCorruptionError
+      14
+      15  _PBKDF2_ITERATIONS: int = 600_000
+      16
+
+● Update(file_storage/user_store.py)
+  ⎿  Added 3 lines, removed 3 lines
+      161              with open(path) as f:
+      162                  data = json.load(f)
+      163          except json.JSONDecodeError as e:
+      164 -            raise KeyStoreCorruptionError(
+      164 +            raise StoreCorruptionError(
+      165                  f"User file corrupted: {user_id}.json"
+      166              ) from e
+      167
+      168          try:
+      169              return _user_record_from_dict(data)
+      170          except (KeyError, TypeError) as e:
+      171 -            raise KeyStoreCorruptionError(
+      171 +            raise StoreCorruptionError(
+      172                  f"User file has missing fields: {user_id}.json"
+      173              ) from e
+      174
+     ...
+      181                  record = self.load_user(user_id)
+      182                  if record.username == username:
+      183                      return record
+      184 -            except (UserNotFoundError, KeyStoreCorruptionError):
+      184 +            except (UserNotFoundError, StoreCorruptionError):
+      185                  pass
+      186
+      187          # Fallback: scan all user files
+
+● Now do the same for role_store.py.
+
+● Update(file_storage/role_store.py)
+  ⎿  Added 1 line, removed 1 line
+       8  from dataclasses import asdict, dataclass, field
+       9  from pathlib import Path
+      10
+      11 -from file_storage.errors import RoleNotFoundError, KeyStoreCorruptionError
+      11 +from file_storage.errors import RoleNotFoundError, StoreCorruptionError
+      12
+      13
+      14  @dataclass
+
+● Update(file_storage/role_store.py)
+  ⎿  Added 2 lines, removed 2 lines
+      77              with open(path) as f:
+      78                  data = json.load(f)
+      79          except json.JSONDecodeError as e:
+      80 -            raise KeyStoreCorruptionError(
+      80 +            raise StoreCorruptionError(
+      81                  f"Role file corrupted: {role_id}.json"
+      82              ) from e
+      83
+      84          try:
+      85              return _role_record_from_dict(data)
+      86          except (KeyError, TypeError) as e:
+      87 -            raise KeyStoreCorruptionError(
+      87 +            raise StoreCorruptionError(
+      88                  f"Role file has missing fields: {role_id}.json"
+      89              ) from e
+      90
+
+● Now I need to check whether existing tests import KeyStoreCorruptionError for user/role store tests and update them. Let me check.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● I need to update the test files that reference KeyStoreCorruptionError for user and role store tests. StoreCorruptionError inherits from FileStorageError just like
+  KeyStoreCorruptionError, so tests should use the new error. Let me read and update the test files.
+
+● Read 2 files (ctrl+o to expand)
+
+● Now update the tests. StoreCorruptionError still matches the same error messages, so I just need to update the imports and references.
+
+● Update(tests/test_user_store.py)
+  ⎿  Added 1 line, removed 1 line
+       6
+       7  import pytest
+       8
+       9 -from file_storage.errors import UserNotFoundError, KeyStoreCorruptionError
+       9 +from file_storage.errors import UserNotFoundError, StoreCorruptionError
+      10  from file_storage.user_store import (
+      11      UserRecord,
+      12      UserStore,
+
+● Update(tests/test_user_store.py)
+  ⎿  Added 2 lines, removed 2 lines
+      102          store = UserStore(tmp_path / "users")
+      103          path = store.base_dir / "corrupt.json"
+      104          path.write_text("{invalid json")
+      105 -        with pytest.raises(KeyStoreCorruptionError, match="corrupted"):
+      105 +        with pytest.raises(StoreCorruptionError, match="corrupted"):
+      106              store.load_user("corrupt")
+      107
+      108      def test_missing_fields_raises(self, tmp_path):
+      109          store = UserStore(tmp_path / "users")
+      110          path = store.base_dir / "incomplete.json"
+      111          path.write_text('{"user_id": "incomplete"}')
+      112 -        with pytest.raises(KeyStoreCorruptionError, match="missing fields"):
+      112 +        with pytest.raises(StoreCorruptionError, match="missing fields"):
+      113              store.load_user("incomplete")
+      114
+      115
+
+● Update(tests/test_role_store.py)
+  ⎿  Added 1 line, removed 1 line
+       6
+       7  import pytest
+       8
+       9 -from file_storage.errors import RoleNotFoundError, KeyStoreCorruptionError
+       9 +from file_storage.errors import RoleNotFoundError, StoreCorruptionError
+      10  from file_storage.role_store import RoleRecord, RoleStore
+      11
+      12
+
+● Update(tests/test_role_store.py)
+  ⎿  Added 2 lines, removed 2 lines
+      59          store = RoleStore(tmp_path / "roles")
+      60          path = store.base_dir / "corrupt.json"
+      61          path.write_text("{invalid json")
+      62 -        with pytest.raises(KeyStoreCorruptionError, match="corrupted"):
+      62 +        with pytest.raises(StoreCorruptionError, match="corrupted"):
+      63              store.load_role("corrupt")
+      64
+      65      def test_missing_fields_raises(self, tmp_path):
+      66          store = RoleStore(tmp_path / "roles")
+      67          path = store.base_dir / "incomplete.json"
+      68          path.write_text('{"role_id": "incomplete"}')
+      69 -        with pytest.raises(KeyStoreCorruptionError, match="missing fields"):
+      69 +        with pytest.raises(StoreCorruptionError, match="missing fields"):
+      70              store.load_role("incomplete")
+      71
+      72
+
+● I also need to check that the access_control.py test references KeyStoreCorruptionError. Let me also check if access_control.py still imports UserNotFoundError (it's imported
+  but never used directly in the updated version).
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● UserNotFoundError is imported but not directly used in access_control.py -- it's raised by the user_store calls. Let me remove it.
+
+● Update(file_storage/access_control.py)
+  ⎿  Removed 1 line
+      11      RoleNotFoundError,
+      12      UserAccessExpiredError,
+      13      UserInactiveError,
+      14 -    UserNotFoundError,
+      14  )
+      15  from file_storage.permissions import DEFAULT_ROLES
+      16  from file_storage.role_store import RoleRecord, RoleStore
+
+● Now let me check for dead code. Let me look for unused imports, unused constants, and unused variables across all source files.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● DEFAULT_USERS_DIR and DEFAULT_ROLES_DIR are defined but never used anywhere. The code uses _get_data_dir(args) / "users" and _get_data_dir(args) / "roles" instead. Let me also
+  check for any other unused imports/code.
+
+● Searched for 3 patterns (ctrl+o to expand)
+
+● Let me check if DEFAULT_KEYSTORE_DIR is actually used in cli.py.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● DEFAULT_KEYSTORE_DIR is imported but not used in cli.py (the keystore dir is derived from _get_data_dir(args) / "keys"). Let me also check verify_hmac usage in key_manager.py.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● verify_hmac is imported in key_manager.py but never used there. Let me clean up all this dead code.
+
+● Update(file_storage/constants.py)
+  ⎿  Added 1 line, removed 3 lines
+      12  ENV_KEYSTORE_DIR: str = "FILE_STORAGE_KEYSTORE"
+      13  ENC_EXTENSION: str = ".enc"
+      14
+      15 -# RBAC directory defaults
+      16 -DEFAULT_USERS_DIR: str = "./data/users"
+      17 -DEFAULT_ROLES_DIR: str = "./data/roles"
+      15 +# RBAC defaults
+      16  ENV_CURRENT_USER: str = "FILE_STORAGE_USER"
+      17  ENV_DATA_DIR: str = "FILE_STORAGE_DATADIR"
+      18  DEFAULT_DATA_DIR: str = "./data"
+
+● Remove unused DEFAULT_KEYSTORE_DIR import from cli.py.
+
+● Update(file_storage/cli.py)
+  ⎿  Removed 1 line
+      15  from file_storage.audit import AuditLogger
+      16  from file_storage.constants import (
+      17      DEFAULT_DATA_DIR,
+      18 -    DEFAULT_KEYSTORE_DIR,
+      18      ENC_EXTENSION,
+      19      ENV_CURRENT_USER,
+      20      ENV_DATA_DIR,
+
+● Remove unused verify_hmac import from key_manager.py.
+
+● Update(file_storage/key_manager.py)
+  ⎿  Added 1 line, removed 1 line
+      21      KeyRevokedError,
+      22  )
+      23  from file_storage.file_format import FileHeader, pack_header, unpack_header
+      24 -from file_storage.integrity import compute_hmac, verify_hmac
+      24 +from file_storage.integrity import compute_hmac
+      25  from file_storage.key_store import KeyRecord, KeyStore, PreviousKeyVersion
+      26  from file_storage.utils import generate_uuid, is_expired, utc_now_iso
+      27  from file_storage.constants import HMAC_SIZE
+
+● Let me also check for any other unused variables/dead code -- old_version_key was an unnecessary assignment in the old key_manager. Let me check the current state.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Good, that was already cleaned up. Now let me check if there are any other unused imports across all files.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Check if unpack_header and pack_header are both used in key_manager -- yes they are in _reencrypt_file. Good. Let me also check DEFAULT_KEYSTORE_DIR usage in tests.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Good. Now let me also check if DEFAULT_USERS_DIR or DEFAULT_ROLES_DIR are used in tests.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Good. Let me check if the secure_delete_bytes function in utils.py is used anywhere.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● secure_delete_bytes is defined but never used anywhere. It should be removed.
+
+● Update(file_storage/utils.py)
+  ⎿  Removed 9 lines
+      30          return False
+      31      expiry = parse_datetime(expires_at)
+      32      return datetime.now(timezone.utc) >= expiry
+      33 -
+      34 -
+      35 -def secure_delete_bytes(data: bytearray) -> None:
+      36 -    """Overwrite a bytearray with zeros to reduce key exposure in memory.
+      37 -
+      38 -    Note: best-effort only. Python's GC may retain copies.
+      39 -    """
+      40 -    for i in range(len(data)):
+      41 -        data[i] = 0
+
+● Now let me update the README.
+
+● Write(README.md)
+  ⎿  Added 160 lines, removed 1 line
+        1  # File_storage
+        2
+        3 -A file storage project.
+        3 +A CLI file encryption tool with full key lifecycle management and role-based access control (RBAC).
+        4 +
+        5 +## Features
+        6 +
+        7 +- **AES-256-GCM encryption/decryption** of files with authenticated encryption
+        8 +- **Key lifecycle management**: create, rotate, revoke, and expire encryption keys
+        9 +- **HMAC-SHA256 integrity verification** to detect file tampering before decryption
+       10 +- **Role-Based Access Control (RBAC)** with users, roles, and fine-grained permissions
+       11 +- **Password-based authentication** using PBKDF2-SHA256 with 600,000 iterations
+       12 +- **Audit logging** of all security-relevant operations (JSON-lines format)
+       13 +- **Atomic file writes** to prevent data corruption on failures
+       14 +
+       15 +## Requirements
+       16 +
+       17 +- Python >= 3.10
+       18 +- cryptography >= 42.0
+       19 +
+       20 +## Installation
+       21 +
+       22 +```bash
+       23 +pip install -e .
+       24 +```
+       25 +
+       26 +For development (includes pytest):
+       27 +
+       28 +```bash
+       29 +pip install -e ".[dev]"
+       30 +```
+       31 +
+       32 +## Quick Start
+       33 +
+       34 +### Encrypt a file
+       35 +
+       36 +```bash
+       37 +file_storage encrypt myfile.txt
+       38 +```
+       39 +
+       40 +This creates `myfile.txt.enc` and a new AES-256 key.
+       41 +
+       42 +### Decrypt a file
+       43 +
+       44 +```bash
+       45 +file_storage decrypt myfile.txt.enc
+       46 +```
+       47 +
+       48 +### Initialize RBAC (optional)
+       49 +
+       50 +```bash
+       51 +file_storage init --admin-user admin --admin-password secret
+       52 +```
+       53 +
+       54 +Once initialized, all commands require `--user <username>`:
+       55 +
+       56 +```bash
+       57 +file_storage --user admin encrypt myfile.txt
+       58 +```
+       59 +
+       60 +## Commands
+       61 +
+       62 +### File Operations
+       63 +
+       64 +| Command | Description |
+       65 +|---------|-------------|
+       66 +| `encrypt <file> [-o OUTPUT] [--force] [--description DESC]` | Encrypt a file |
+       67 +| `decrypt <file> [-o OUTPUT] [--force]` | Decrypt an encrypted file |
+       68 +
+       69 +### Key Management
+       70 +
+       71 +| Command | Description |
+       72 +|---------|-------------|
+       73 +| `keys list [--status active\|expired\|revoked\|all]` | List keys |
+       74 +| `keys info <key_id>` | Show key details |
+       75 +| `keys revoke <key_id>` | Revoke a key |
+       76 +| `keys rotate <key_id>` | Rotate key (re-encrypts associated files) |
+       77 +| `keys expire <key_id> --at <ISO 8601>` | Set key expiry |
+       78 +
+       79 +### User Management (requires RBAC init)
+       80 +
+       81 +| Command | Description |
+       82 +|---------|-------------|
+       83 +| `user create <username> --password <pass> --role <role>` | Create user |
+       84 +| `user list` | List all users |
+       85 +| `user info <username>` | Show user details |
+       86 +| `user deactivate <username>` | Deactivate a user |
+       87 +| `user set-expiry <username> --at <ISO 8601>` | Set access expiry |
+       88 +
+       89 +### Role Management
+       90 +
+       91 +| Command | Description |
+       92 +|---------|-------------|
+       93 +| `role list` | List all roles |
+       94 +| `role info <name>` | Show role details and permissions |
+       95 +
+       96 +### Default Roles
+       97 +
+       98 +| Role | Description |
+       99 +|------|-------------|
+      100 +| `admin` | Full system administrator with all permissions |
+      101 +| `key_manager` | Can create, rotate, revoke, and manage all keys |
+      102 +| `encryptor` | Can encrypt files and manage own keys |
+      103 +| `viewer` | Read-only access to key listings and info |
+      104 +| `auditor` | Can view all keys and users for audit purposes |
+      105 +
+      106 +## Global Flags
+      107 +
+      108 +| Flag | Description |
+      109 +|------|-------------|
+      110 +| `--keystore PATH` | Override keystore directory |
+      111 +| `--datadir PATH` | Override data root directory |
+      112 +| `--user USERNAME` | RBAC user (or set `FILE_STORAGE_USER` env var) |
+      113 +| `--quiet`, `-q` | Suppress non-error output |
+      114 +| `--verbose`, `-v` | Enable verbose output |
+      115 +
+      116 +## Audit Logging
+      117 +
+      118 +All operations are logged to `<datadir>/audit/audit.jsonl` as JSON-lines. Each entry includes:
+      119 +
+      120 +- Event ID and timestamp
+      121 +- Event type (e.g., `file:encrypt`, `key:revoke`, `user:create`)
+      122 +- Success/failure status
+      123 +- Acting user
+      124 +- Operation-specific details
+      125 +- Error message on failure
+      126 +
+      127 +## Project Structure
+      128 +
+      129 +```
+      130 +file_storage/
+      131 +  __init__.py         # Package metadata
+      132 +  __main__.py         # Entry point for python -m file_storage
+      133 +  cli.py              # CLI interface and command handlers
+      134 +  constants.py        # Configuration constants
+      135 +  crypto.py           # AES-256-GCM encryption primitives
+      136 +  integrity.py        # HMAC-SHA256 verification
+      137 +  file_format.py      # Binary file header pack/unpack
+      138 +  key_manager.py      # Key lifecycle operations
+      139 +  key_store.py        # Key persistence (JSON files)
+      140 +  user_store.py       # User persistence with password hashing
+      141 +  role_store.py       # Role persistence (JSON files)
+      142 +  access_control.py   # RBAC enforcement engine
+      143 +  permissions.py      # Permission constants and default roles
+      144 +  audit.py            # Audit logging
+      145 +  errors.py           # Custom exception hierarchy
+      146 +  utils.py            # Utility functions
+      147 +tests/
+      148 +  conftest.py         # Shared test fixtures
+      149 +  test_*.py           # Test modules
+      150 +```
+      151 +
+      152 +## Running Tests
+      153 +
+      154 +```bash
+      155 +pytest
+      156 +```
+      157 +
+      158 +With coverage:
+      159 +
+      160 +```bash
+      161 +pytest --cov=file_storage
+      162 +```
+
+● Now let me write the audit logging tests.
+
+● Write(tests/test_audit.py)
+  ⎿  Wrote 147 lines to tests/test_audit.py
+     """Tests for audit logging."""
+
+     import json
+
+     import pytest
+
+     from file_storage.audit import (
+         AuditEvent,
+         AuditLogger,
+         EVENT_ENCRYPT,
+     … +137 lines (ctrl+o to expand)
+
+● Now let me run the tests to verify everything works.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Bash(.venv/bin/python -m pytest tests/ -v --tb=short 2>&1)
+  ⎿  ============================= test session starts ==============================
+     platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /home/adan/.cache/claude-hfi/-mnt-c-Users-ASUS-Desktop-New-Project/B/.venv/bin/python
+     cachedir: .pytest_cache
+     … +137 lines (ctrl+o to expand)
+  ⎿  (timeout 3m)
+
+● All 256 tests pass. Let me update the todo list.
+
+● All 256 tests pass (including 12 new audit logging tests). Here's a summary of all changes made:
+
+  Changes Summary
+
+  1. Audit Logging (file_storage/audit.py - new)
+
+  - Created AuditLogger class that writes structured JSON-lines audit events to <datadir>/audit/audit.jsonl
+  - Each event records: event ID, timestamp, event type, success/failure, user, details, and error message
+  - Defined event type constants for all operations (encrypt, decrypt, key management, user management, auth, access control)
+  - Added read_events() for reading back the audit log
+
+  2. Refactored Exception Handling (file_storage/cli.py)
+
+  - Replaced 16 repetitive try/except blocks (each with duplicate chains of except IntegrityError, except KeyExpiredError, except KeyRevokedError, etc.) with a single
+  @handle_errors() decorator
+  - The decorator catches SystemExit, ValueError, FileStorageError, and OSError in one place
+  - Every CLI command is decorated with @handle_errors(audit_event_type="...") which automatically logs audit events on success/failure
+  - Removed unused imports (DEFAULT_KEYSTORE_DIR, individual error types that are subclasses of FileStorageError)
+  - Moved IntegrityError import to top-level instead of a late inline import
+
+  3. Audit Logging in Key Manager (file_storage/key_manager.py)
+
+  - Added logging.getLogger for structured logging of key lifecycle events
+  - Key creation, revocation, expiry changes, and rotation now produce log entries
+  - Fixed silent failure during key rotation: Previously, re-encryption failures were silently swallowed. Now:
+    - FileNotFoundError during rotation logs a warning and removes the file association
+    - Other re-encryption failures are logged at ERROR level with the exception details
+
+  4. Audit Logging in Access Control (file_storage/access_control.py)
+
+  - Added structured logging for authentication (success/failure), permission denials, user creation, deactivation, and expiry changes
+  - Removed unused UserNotFoundError import
+
+  5. Fixed Error Handling Precision
+
+  - file_storage/errors.py: Added StoreCorruptionError for user/role file corruption (previously these incorrectly raised KeyStoreCorruptionError)
+  - file_storage/user_store.py: Switched from KeyStoreCorruptionError to StoreCorruptionError
+  - file_storage/role_store.py: Switched from KeyStoreCorruptionError to StoreCorruptionError
+  - Updated corresponding test files to use the new error class
+
+  6. Dead Code Removal
+
+  - file_storage/constants.py: Removed DEFAULT_USERS_DIR and DEFAULT_ROLES_DIR (defined but never referenced)
+  - file_storage/utils.py: Removed secure_delete_bytes() (defined but never called)
+  - file_storage/key_manager.py: Removed unused verify_hmac import
+  - file_storage/cli.py: Removed unused DEFAULT_KEYSTORE_DIR import
+
+  7. Updated README (README.md)
+
+  - Comprehensive documentation covering features, installation, quick start, all CLI commands, default roles, global flags, audit logging, and project structure
+
+  8. New Tests (tests/test_audit.py)
+
+  - 12 tests covering: event creation, file writing, appending, failure events, reading events, corrupt line handling, directory creation, and the AuditEvent dataclass
+
+✶ Elucidating… (10m 7s · ↓ 30.5k tokens)
+adan@AdanDESKTOP:~/.cache/claude-hfi/-mnt-c-Users-ASUS-Desktop-New-Project/B$ tmux capture-pane -pS -3000 > trajectory_b_response.txt
+
